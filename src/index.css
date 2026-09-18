@@ -1,0 +1,187 @@
+@import 'leaflet/dist/leaflet.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== Theme CSS Variables ===== */
+:root,
+[data-theme="tactical"] {
+  --bg-base: #0f172a;
+  --bg-panel: #0f172a;
+  --bg-sidebar: #020617;
+  --bg-card: #1e293b;
+  --bg-input: #020617;
+  --bg-hover: #1e293b;
+  --border-base: #334155;
+  --border-soft: #1e293b;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #22d3ee;
+  --accent-hover: #06b6d4;
+  --accent-soft: rgba(34, 211, 238, 0.1);
+  --accent-border: rgba(34, 211, 238, 0.3);
+  --accent-text-on: #0f172a;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --danger-soft: rgba(239, 68, 68, 0.1);
+  --danger-border: rgba(239, 68, 68, 0.3);
+  color-scheme: dark;
+}
+
+[data-theme="matrix"] {
+  --bg-base: #000000;
+  --bg-panel: #0a0a0a;
+  --bg-sidebar: #000000;
+  --bg-card: #0d0d0d;
+  --bg-input: #000000;
+  --bg-hover: #111;
+  --border-base: #1a1a1a;
+  --border-soft: #0d0d0d;
+  --text-primary: #c8ffd4;
+  --text-secondary: #5a8a5a;
+  --text-muted: #3a5a3a;
+  --accent: #00ff41;
+  --accent-hover: #00cc33;
+  --accent-soft: rgba(0, 255, 65, 0.08);
+  --accent-border: rgba(0, 255, 65, 0.25);
+  --accent-text-on: #000000;
+  --success: #00ff41;
+  --warning: #ccff00;
+  --danger: #ff3333;
+  --danger-soft: rgba(255, 51, 51, 0.08);
+  --danger-border: rgba(255, 51, 51, 0.25);
+  color-scheme: dark;
+}
+
+[data-theme="cyberpunk"] {
+  --bg-base: #1a0a2e;
+  --bg-panel: #1a0a2e;
+  --bg-sidebar: #120721;
+  --bg-card: #2a1245;
+  --bg-input: #120721;
+  --bg-hover: #2a1245;
+  --border-base: #4c1d7a;
+  --border-soft: #2a1245;
+  --text-primary: #f0e6ff;
+  --text-secondary: #b39ddb;
+  --text-muted: #7e57c2;
+  --accent: #ff00ff;
+  --accent-hover: #d400d4;
+  --accent-soft: rgba(255, 0, 255, 0.1);
+  --accent-border: rgba(255, 0, 255, 0.3);
+  --accent-text-on: #1a0a2e;
+  --success: #ffaa00;
+  --warning: #ffaa00;
+  --danger: #ff0066;
+  --danger-soft: rgba(255, 0, 102, 0.1);
+  --danger-border: rgba(255, 0, 102, 0.3);
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg-base: #f8fafc;
+  --bg-panel: #ffffff;
+  --bg-sidebar: #f1f5f9;
+  --bg-card: #f8fafc;
+  --bg-input: #ffffff;
+  --bg-hover: #f1f5f9;
+  --border-base: #cbd5e1;
+  --border-soft: #e2e8f0;
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --accent: #0891b2;
+  --accent-hover: #0e7490;
+  --accent-soft: rgba(8, 145, 178, 0.08);
+  --accent-border: rgba(8, 145, 178, 0.25);
+  --accent-text-on: #ffffff;
+  --success: #059669;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.08);
+  --danger-border: rgba(220, 38, 38, 0.25);
+  color-scheme: light;
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+/* ===== Theme utility classes ===== */
+@layer utilities {
+  .bg-app { background-color: var(--bg-base); }
+  .bg-panel { background-color: var(--bg-panel); }
+  .bg-sidebar { background-color: var(--bg-sidebar); }
+  .bg-card { background-color: var(--bg-card); }
+  .bg-input { background-color: var(--bg-input); }
+  .bg-hover { background-color: var(--bg-hover); }
+  .bg-accent { background-color: var(--accent); }
+  .bg-accent-soft { background-color: var(--accent-soft); }
+  .bg-danger-soft { background-color: var(--danger-soft); }
+
+  .border-app { border-color: var(--border-base); }
+  .border-soft { border-color: var(--border-soft); }
+  .border-accent { border-color: var(--accent-border); }
+  .border-danger { border-color: var(--danger-border); }
+
+  .text-app { color: var(--text-primary); }
+  .text-secondary { color: var(--text-secondary); }
+  .text-muted { color: var(--text-muted); }
+  .text-accent { color: var(--accent); }
+  .text-accent-on { color: var(--accent-text-on); }
+  .text-success { color: var(--success); }
+  .text-warning { color: var(--warning); }
+  .text-danger { color: var(--danger); }
+
+  .hover\:text-accent:hover { color: var(--accent); }
+  .hover\:bg-hover:hover { background-color: var(--bg-hover); }
+  .hover\:border-accent:hover { border-color: var(--accent); }
+
+  .animate-slide-in { animation: slide-in 0.3s ease-out; }
+  .animate-fade-in { animation: fade-in 0.2s ease-out; }
+  .animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+  .animate-scan { animation: scan 1.5s ease-in-out infinite; }
+
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: var(--bg-card); }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border-base); border-radius: 3px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+}
+
+@keyframes slide-in {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(34, 211, 238, 0); }
+}
+
+@keyframes scan {
+  0% { opacity: 0.3; }
+  50% { opacity: 1; }
+  100% { opacity: 0.3; }
+}
+
+/* Leaflet theme overrides */
+.leaflet-container { background: var(--bg-card) !important; }
+.leaflet-tile { filter: brightness(0.7) invert(1) contrast(0.9) hue-rotate(180deg) saturate(0.6); }
+[data-theme="light"] .leaflet-tile { filter: none; }
+.leaflet-popup-content-wrapper { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-base); }
+.leaflet-popup-tip { background: var(--bg-card); }
