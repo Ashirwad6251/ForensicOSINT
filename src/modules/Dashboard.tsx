@@ -15,6 +15,7 @@ import { useToast } from '@/components/Toast';
 import { supabase, type EntityRow, type EvidenceRow, type CaseRow } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit';
 import { formatDate, formatBytes } from '@/lib/format';
+import { localCases, isNetworkError } from '@/lib/localCases';
 
 export function Dashboard() {
   const { currentCase, cases, refreshCases, refreshCurrentCase } = useCase();
@@ -33,51 +34,79 @@ export function Dashboard() {
   useEffect(() => {
     if (!currentCase) return;
     (async () => {
-      const [{ count: entityCount }, { count: evidenceCount }, { count: flaggedCount }] = await Promise.all([
-        supabase.from('entities').select('*', { count: 'exact', head: true }).eq('case_id', currentCase.id),
-        supabase.from('evidence_files').select('*', { count: 'exact', head: true }).eq('case_id', currentCase.id),
-        supabase.from('entities').select('*', { count: 'exact', head: true }).eq('case_id', currentCase.id).eq('flagged', true),
-      ]);
-      setStats({
-        entities: entityCount || 0,
-        evidence: evidenceCount || 0,
-        flagged: flaggedCount || 0,
-      });
+      try {
+        const [{ count: entityCount }, { count: evidenceCount }, { count: flaggedCount }] = await Promise.all([
+          supabase.from('entities').select('*', { count: 'exact', head: true }).eq('case_id', currentCase.id),
+          supabase.from('evidence_files').select('*', { count: 'exact', head: true }).eq('case_id', currentCase.id),
+          supabase.from('entities').select('*', { count: 'exact', head: true }).eq('case_id', currentCase.id).eq('flagged', true),
+        ]);
+        setStats({
+          entities: entityCount || 0,
+          evidence: evidenceCount || 0,
+          flagged: flaggedCount || 0,
+        });
 
-      const { data: audit } = await supabase
-        .from('audit_logs')
-        .select('action, description, created_at')
-        .eq('case_id', currentCase.id)
-        .order('created_at', { ascending: false })
-        .limit(8);
-      setRecentAudit(audit || []);
+        const { data: audit, error: auditError } = await supabase
+          .from('audit_logs')
+          .select('action, description, created_at')
+          .eq('case_id', currentCase.id)
+          .order('created_at', { ascending: false })
+          .limit(8);
+        if (auditError) throw auditError;
+        setRecentAudit(audit || []);
+      } catch (err) {
+        if (isNetworkError(err)) {
+          setStats({ entities: 0, evidence: 0, flagged: 0 });
+          setRecentAudit([]);
+        } else {
+          console.error('Dashboard load failed:', err);
+        }
+      }
     })();
   }, [currentCase]);
 
   const handleEdit = async () => {
     if (!currentCase) return;
-    const { error } = await supabase
-      .from('cases')
-      .update({
-        title: editData.title,
-        description: editData.description,
-        status: editData.status,
-        priority: editData.priority,
-        risk_score: editData.risk_score,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', currentCase.id);
+    try {
+      const { error } = await supabase
+        .from('cases')
+        .update({
+          title: editData.title,
+          description: editData.description,
+          status: editData.status,
+          priority: editData.priority,
+          risk_score: editData.risk_score,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', currentCase.id);
 
-    if (error) {
-      showToast(`Failed to update case: ${error.message}`, 'error');
-      return;
+      if (error) throw error;
+
+      await logAudit(currentCase.id, 'CASE_UPDATED', `Case "${editData.title}" details updated`, 'case', currentCase.case_number);
+      await refreshCases();
+      await refreshCurrentCase();
+      showToast('Case updated successfully', 'success');
+    } catch (err) {
+      if (isNetworkError(err)) {
+        const updated: CaseRow = {
+          ...currentCase,
+          title: editData.title,
+          description: editData.description,
+          status: editData.status,
+          priority: editData.priority,
+          risk_score: editData.risk_score,
+          updated_at: new Date().toISOString(),
+        };
+        localCases.upsert(updated);
+        await refreshCases();
+        await refreshCurrentCase();
+        showToast('Case updated (offline)', 'success');
+      } else {
+        showToast(`Failed to update case: ${(err as Error).message}`, 'error');
+      }
+    } finally {
+      setEditModal(false);
     }
-
-    await logAudit(currentCase.id, 'CASE_UPDATED', `Case "${editData.title}" details updated`, 'case', currentCase.case_number);
-    await refreshCases();
-    await refreshCurrentCase();
-    showToast('Case updated successfully', 'success');
-    setEditModal(false);
   };
 
   const openEdit = () => {

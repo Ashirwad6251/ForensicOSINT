@@ -15,8 +15,9 @@ import { useCase } from './CaseContext';
 import { StatusBadge } from './Badges';
 import { Modal } from './Modal';
 import { useToast } from './Toast';
-import { supabase } from '@/lib/supabase';
+import { supabase, type CaseRow } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit';
+import { localCases, isNetworkError } from '@/lib/localCases';
 
 export type ModuleKey = 'dashboard' | 'image-lens' | 'recon' | 'link-analysis' | 'capture-audit' | 'reporting';
 
@@ -53,30 +54,53 @@ export function Sidebar({
       return;
     }
     const caseNum = `CASE-${newCaseData.case_number}`;
-    const { data, error } = await supabase
-      .from('cases')
-      .insert({
-        title: newCaseData.title,
-        case_number: caseNum,
-        description: newCaseData.description,
-        priority: newCaseData.priority,
-        status: 'active',
-        risk_score: 0,
-      })
-      .select()
-      .single();
+    const now = new Date().toISOString();
 
-    if (error) {
-      showToast(`Failed to create case: ${error.message}`, 'error');
-      return;
+    try {
+      const { data, error } = await supabase
+        .from('cases')
+        .insert({
+          title: newCaseData.title,
+          case_number: caseNum,
+          description: newCaseData.description,
+          priority: newCaseData.priority,
+          status: 'active',
+          risk_score: 0,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      await logAudit(data.id, 'CASE_CREATED', `Case "${data.title}" opened`, 'case', data.case_number);
+      await refreshCases();
+      switchCase(data.id);
+      showToast(`Case ${caseNum} created successfully`, 'success');
+    } catch (err) {
+      if (isNetworkError(err)) {
+        const localCase: CaseRow = {
+          id: `local-${Date.now()}`,
+          case_number: caseNum,
+          title: newCaseData.title,
+          description: newCaseData.description,
+          status: 'active',
+          priority: newCaseData.priority,
+          risk_score: 0,
+          operator_id: 'INVESTIGATOR-001',
+          created_at: now,
+          updated_at: now,
+        };
+        const updated = localCases.upsert(localCase);
+        await refreshCases();
+        switchCase(localCase.id);
+        showToast(`Case ${caseNum} created (offline)`, 'success');
+      } else {
+        showToast(`Failed to create case: ${(err as Error).message}`, 'error');
+      }
+    } finally {
+      setNewCaseModal(false);
+      setNewCaseData({ title: '', case_number: '', description: '', priority: 'medium' });
     }
-
-    await logAudit(data.id, 'CASE_CREATED', `Case "${data.title}" opened`, 'case', data.case_number);
-    await refreshCases();
-    switchCase(data.id);
-    showToast(`Case ${caseNum} created successfully`, 'success');
-    setNewCaseModal(false);
-    setNewCaseData({ title: '', case_number: '', description: '', priority: 'medium' });
   };
 
   return (

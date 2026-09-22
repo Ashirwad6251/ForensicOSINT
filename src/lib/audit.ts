@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { isNetworkError } from './localCases';
 
 const OPERATOR_ID = 'INVESTIGATOR-001';
 
@@ -16,15 +17,24 @@ export async function logAudit(
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 
-  await supabase.from('audit_logs').insert({
-    case_id: caseId,
-    action,
-    entity_type: entityType,
-    entity_id: entityId,
-    description,
-    operator_id: OPERATOR_ID,
-    hash_signature: hashSig,
-  });
+  try {
+    const { error } = await supabase.from('audit_logs').insert({
+      case_id: caseId,
+      action,
+      entity_type: entityType,
+      entity_id: entityId,
+      description,
+      operator_id: OPERATOR_ID,
+      hash_signature: hashSig,
+    });
+    if (error) throw error;
+  } catch (err) {
+    if (isNetworkError(err)) {
+      console.warn('Audit log skipped (offline):', action);
+      return;
+    }
+    console.error('Audit log failed:', err);
+  }
 }
 
 export { OPERATOR_ID };
