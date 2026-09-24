@@ -8,6 +8,8 @@ import { supabase, type WebCaptureRow, type AuditLogRow, type LensMatchRow } fro
 import { logAudit, OPERATOR_ID } from '@/lib/audit';
 import { formatDate, formatBytes, truncateHash } from '@/lib/format';
 import { Modal } from '@/components/Modal';
+import { safeQuery, isNetworkError } from '@/lib/localCases';
+import { getMockData } from '@/lib/mockData';
 
 type Tab = 'captures' | 'audit';
 
@@ -24,14 +26,15 @@ export function CaptureAudit() {
   useEffect(() => {
     if (!currentCase) return;
     (async () => {
-      const [{ data: caps }, { data: logs }, { data: matches }] = await Promise.all([
-        supabase.from('web_captures').select('*').eq('case_id', currentCase.id).order('created_at', { ascending: false }),
-        supabase.from('audit_logs').select('*').eq('case_id', currentCase.id).order('created_at', { ascending: false }),
-        supabase.from('lens_matches').select('*').eq('case_id', currentCase.id).order('created_at', { ascending: false }),
+      const mock = getMockData(currentCase.id);
+      const [caps, logs, matches] = await Promise.all([
+        safeQuery(() => supabase.from('web_captures').select('*').eq('case_id', currentCase.id).order('created_at', { ascending: false }), mock.captures as WebCaptureRow[]),
+        safeQuery(() => supabase.from('audit_logs').select('*').eq('case_id', currentCase.id).order('created_at', { ascending: false }), mock.auditLogs as AuditLogRow[]),
+        safeQuery(() => supabase.from('lens_matches').select('*').eq('case_id', currentCase.id).order('created_at', { ascending: false }), mock.lensMatches as LensMatchRow[]),
       ]);
-      setCaptures(caps || []);
-      setAuditLogs(logs || []);
-      setLensMatches(matches || []);
+      setCaptures(caps);
+      setAuditLogs(logs);
+      setLensMatches(matches);
     })();
   }, [currentCase]);
 
@@ -42,10 +45,20 @@ export function CaptureAudit() {
     const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(mockContent));
     const hash = Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, '0')).join('');
     const pageTitle = captureUrl.split('/').pop() || captureUrl;
-    const { data, error } = await supabase.from('web_captures').insert({ case_id: currentCase.id, url: captureUrl, page_title: pageTitle, capture_format: 'WARC', sha256: hash, file_size: mockContent.length }).select().single();
-    if (error) { showToast(`Capture failed: ${error.message}`, 'error'); return; }
-    await logAudit(currentCase.id, 'WEB_CAPTURED', `Web capture of ${captureUrl} (WARC format, SHA-256 verified)`, 'web_capture', data.id);
-    setCaptures((prev) => [data, ...prev]);
+    const newCapture: WebCaptureRow = { id: `local-cap-${Date.now()}`, case_id: currentCase.id, url: captureUrl, page_title: pageTitle, capture_format: 'WARC', sha256: hash, file_size: mockContent.length, operator_id: OPERATOR_ID, created_at: new Date().toISOString() };
+    try {
+      const { data, error } = await supabase.from('web_captures').insert({ case_id: currentCase.id, url: captureUrl, page_title: pageTitle, capture_format: 'WARC', sha256: hash, file_size: mockContent.length }).select().single();
+      if (error) throw error;
+      await logAudit(currentCase.id, 'WEB_CAPTURED', `Web capture of ${captureUrl} (WARC format, SHA-256 verified)`, 'web_capture', data.id);
+      setCaptures((prev) => [data, ...prev]);
+    } catch (err) {
+      if (isNetworkError(err)) {
+        await logAudit(currentCase.id, 'WEB_CAPTURED', `Web capture of ${captureUrl} (WARC format, SHA-256 verified)`, 'web_capture', newCapture.id);
+        setCaptures((prev) => [newCapture, ...prev]);
+      } else {
+        showToast(`Capture failed: ${(err as Error).message}`, 'error'); return;
+      }
+    }
     setCaptureUrl('');
     setCaptureModal(false);
     showToast(`Web page captured: ${truncateHash(captureUrl, 30)}`, 'success');
@@ -53,7 +66,7 @@ export function CaptureAudit() {
 
   const handleDeleteCapture = async (id: string) => {
     if (!currentCase) return;
-    await supabase.from('web_captures').delete().eq('id', id);
+    try { await supabase.from('web_captures').delete().eq('id', id); } catch { /* offline */ }
     setCaptures((prev) => prev.filter((c) => c.id !== id));
     showToast('Capture deleted', 'info');
   };

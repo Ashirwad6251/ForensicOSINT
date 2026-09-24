@@ -28,6 +28,8 @@ import { useToast } from '@/components/Toast';
 import { supabase, type EntityRow, type EntityType } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit';
 import { RiskBadge } from '@/components/Badges';
+import { safeQuery, isNetworkError } from '@/lib/localCases';
+import { getMockData } from '@/lib/mockData';
 
 type SearchType = 'username' | 'email' | 'ip' | 'domain' | 'phone';
 
@@ -336,25 +338,23 @@ export function ReconEngine() {
   useEffect(() => {
     if (!currentCase) return;
     (async () => {
-      const { data } = await supabase
-        .from('entities')
-        .select('*')
-        .eq('case_id', currentCase.id)
-        .in('type', ['person', 'email', 'ip', 'domain', 'username', 'phone', 'url', 'web_page'])
-        .order('created_at', { ascending: false });
-      setEntities(data || []);
+      const mock = getMockData(currentCase.id);
+      const data = await safeQuery(
+        () => supabase.from('entities').select('*').eq('case_id', currentCase.id).in('type', ['person', 'email', 'ip', 'domain', 'username', 'phone', 'url', 'web_page']).order('created_at', { ascending: false }),
+        mock.entities.filter((e) => e.type !== 'image_hash') as EntityRow[],
+      );
+      setEntities(data);
     })();
   }, [currentCase]);
 
   const refreshEntities = useCallback(async () => {
     if (!currentCase) return;
-    const { data } = await supabase
-      .from('entities')
-      .select('*')
-      .eq('case_id', currentCase.id)
-      .in('type', ['person', 'email', 'ip', 'domain', 'username', 'phone', 'url', 'web_page'])
-      .order('created_at', { ascending: false });
-    setEntities(data || []);
+    const mock = getMockData(currentCase.id);
+    const data = await safeQuery(
+      () => supabase.from('entities').select('*').eq('case_id', currentCase.id).in('type', ['person', 'email', 'ip', 'domain', 'username', 'phone', 'url', 'web_page']).order('created_at', { ascending: false }),
+      mock.entities.filter((e) => e.type !== 'image_hash') as EntityRow[],
+    );
+    setEntities(data);
   }, [currentCase]);
 
   const handleSearch = async () => {
@@ -391,26 +391,18 @@ export function ReconEngine() {
       case 'phone': entityType = 'phone'; riskLevel = 'medium'; break;
     }
 
-    const { data: existingEntity } = await supabase
-      .from('entities')
-      .select('id')
-      .eq('case_id', currentCase.id)
-      .eq('value', query)
-      .maybeSingle();
-
-    if (!existingEntity) {
-      await supabase.from('entities').insert({
-        case_id: currentCase.id,
-        type: entityType,
-        value: query,
-        label: `${activeType.toUpperCase()}: ${query}`,
-        metadata: { sources: sources.length, results: allResults.length },
-        risk_level: riskLevel,
-        flagged,
-      });
-      await logAudit(currentCase.id, 'ENTITY_ADDED', `Entity "${query}" added via ${activeType} multi-source aggregation`, entityType, query);
-      await refreshEntities();
+    try {
+      const { data: existingEntity } = await supabase.from('entities').select('id').eq('case_id', currentCase.id).eq('value', query).maybeSingle();
+      if (!existingEntity) {
+        await supabase.from('entities').insert({ case_id: currentCase.id, type: entityType, value: query, label: `${activeType.toUpperCase()}: ${query}`, metadata: { sources: sources.length, results: allResults.length }, risk_level: riskLevel, flagged });
+        await logAudit(currentCase.id, 'ENTITY_ADDED', `Entity "${query}" added via ${activeType} multi-source aggregation`, entityType, query);
+      }
+    } catch (err) {
+      if (isNetworkError(err)) {
+        await logAudit(currentCase.id, 'ENTITY_ADDED', `Entity "${query}" added offline via ${activeType} aggregation`, entityType, query);
+      }
     }
+    await refreshEntities();
 
     setSearching(false);
     showToast(`Aggregation complete: ${allResults.length} results from ${sources.length} sources`, 'success');
@@ -483,9 +475,9 @@ export function ReconEngine() {
 
   const toggleFlag = async (entity: EntityRow) => {
     const newFlag = !entity.flagged;
-    await supabase.from('entities').update({ flagged: newFlag }).eq('id', entity.id);
+    try { await supabase.from('entities').update({ flagged: newFlag }).eq('id', entity.id); } catch { /* offline */ }
     setEntities((prev) => prev.map((e) => (e.id === entity.id ? { ...e, flagged: newFlag } : e)));
-    await logAudit(currentCase!.id, 'ENTITY_FLAGGED', `Entity "${entity.value}" ${newFlag ? 'flagged' : 'unflagged'}`, entity.type, entity.id);
+    try { await logAudit(currentCase!.id, 'ENTITY_FLAGGED', `Entity "${entity.value}" ${newFlag ? 'flagged' : 'unflagged'}`, entity.type, entity.id); } catch { /* offline */ }
     showToast(`Entity ${newFlag ? 'flagged' : 'unflagged'}`, 'info');
   };
 

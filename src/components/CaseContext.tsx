@@ -52,7 +52,7 @@ type CaseContextValue = {
 
 const CaseContext = createContext<CaseContextValue | null>(null);
 
-export function CaseProvider({ children }: { ReactNode }) {
+export function CaseProvider({ children }: { children: ReactNode }) {
   const [cases, setCases] = useState<CaseRow[]>([]);
   const [currentCase, setCurrentCase] = useState<CaseRow | null>(null);
   const [loading, setLoading] = useState(true);

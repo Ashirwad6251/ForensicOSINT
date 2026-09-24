@@ -15,7 +15,8 @@ import { useToast } from '@/components/Toast';
 import { supabase, type EntityRow, type EvidenceRow, type CaseRow } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit';
 import { formatDate, formatBytes } from '@/lib/format';
-import { localCases, isNetworkError } from '@/lib/localCases';
+import { localCases, isNetworkError, safeQuery } from '@/lib/localCases';
+import { getMockData } from '@/lib/mockData';
 
 export function Dashboard() {
   const { currentCase, cases, refreshCases, refreshCurrentCase } = useCase();
@@ -56,8 +57,9 @@ export function Dashboard() {
         setRecentAudit(audit || []);
       } catch (err) {
         if (isNetworkError(err)) {
-          setStats({ entities: 0, evidence: 0, flagged: 0 });
-          setRecentAudit([]);
+          const mock = getMockData(currentCase.id);
+          setStats({ entities: mock.entities.length, evidence: mock.evidence.length, flagged: mock.entities.filter((e) => e.flagged).length });
+          setRecentAudit(mock.auditLogs.slice(0, 8).map((l) => ({ action: l.action, description: l.description, created_at: l.created_at })));
         } else {
           console.error('Dashboard load failed:', err);
         }

@@ -60,7 +60,7 @@ export function ImageLensEngine() {
   }, [currentCase]);
 
   useEffect(() => {
-    if (!selectedEvidence) { setLensMatches([]); setOcrText(''); return; }
+    if (!selectedEvidence || !currentCase) { setLensMatches([]); setOcrText(''); return; }
     (async () => {
       const mock = getMockData(currentCase.id);
       const matches = await safeQuery(
@@ -70,7 +70,7 @@ export function ImageLensEngine() {
       setLensMatches(matches);
       setOcrText(selectedEvidence.ocr_text || '');
     })();
-  }, [selectedEvidence]);
+  }, [selectedEvidence, currentCase]);
 
   useEffect(() => {
     if (!mapRef.current || !selectedEvidence?.gps_lat || !selectedEvidence?.gps_lng) return;

@@ -44,7 +44,7 @@ export const localCases = {
 export { isNetworkError };
 
 export async function safeQuery<T>(
-  supabaseCall: () => Promise<{ data: T | null; error: { message: string } | null }>,
+  supabaseCall: () => PromiseLike<{ data: T | null; error: { message: string } | null }>,
   mockFallback: T,
 ): Promise<T> {
   try {

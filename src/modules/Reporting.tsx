@@ -9,6 +9,8 @@ import { supabase, type EntityRow, type EvidenceRow, type LensMatchRow, type Web
 import { logAudit } from '@/lib/audit';
 import { formatDate, formatBytes, truncateHash } from '@/lib/format';
 import { RiskBadge, StatusBadge, PriorityBadge } from '@/components/Badges';
+import { safeQuery } from '@/lib/localCases';
+import { getMockData } from '@/lib/mockData';
 
 type ReportData = {
   entities: EntityRow[];
@@ -28,22 +30,16 @@ export function Reporting() {
   useEffect(() => {
     if (!currentCase) return;
     (async () => {
+      const mock = getMockData(currentCase.id);
       const [ents, evi, lens, caps, logs, rels] = await Promise.all([
-        supabase.from('entities').select('*').eq('case_id', currentCase.id).order('created_at'),
-        supabase.from('evidence_files').select('*').eq('case_id', currentCase.id).order('created_at'),
-        supabase.from('lens_matches').select('*').eq('case_id', currentCase.id).order('similarity_score', { ascending: false }),
-        supabase.from('web_captures').select('*').eq('case_id', currentCase.id).order('created_at'),
-        supabase.from('audit_logs').select('*').eq('case_id', currentCase.id).order('created_at'),
-        supabase.from('relationships').select('*').eq('case_id', currentCase.id),
+        safeQuery(() => supabase.from('entities').select('*').eq('case_id', currentCase.id).order('created_at'), mock.entities as EntityRow[]),
+        safeQuery(() => supabase.from('evidence_files').select('*').eq('case_id', currentCase.id).order('created_at'), mock.evidence as EvidenceRow[]),
+        safeQuery(() => supabase.from('lens_matches').select('*').eq('case_id', currentCase.id).order('similarity_score', { ascending: false }), mock.lensMatches as LensMatchRow[]),
+        safeQuery(() => supabase.from('web_captures').select('*').eq('case_id', currentCase.id).order('created_at'), mock.captures as WebCaptureRow[]),
+        safeQuery(() => supabase.from('audit_logs').select('*').eq('case_id', currentCase.id).order('created_at'), mock.auditLogs as AuditLogRow[]),
+        safeQuery(() => supabase.from('relationships').select('*').eq('case_id', currentCase.id), mock.relationships as RelationshipRow[]),
       ]);
-      setReportData({
-        entities: ents.data || [],
-        evidence: evi.data || [],
-        lensMatches: lens.data || [],
-        captures: caps.data || [],
-        auditLogs: logs.data || [],
-        relationships: rels.data || [],
-      });
+      setReportData({ entities: ents, evidence: evi, lensMatches: lens, captures: caps, auditLogs: logs, relationships: rels });
     })();
   }, [currentCase]);
 
