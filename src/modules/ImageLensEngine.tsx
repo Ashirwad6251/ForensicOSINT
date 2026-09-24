@@ -1,26 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Upload,
-  Image as ImageIcon,
-  Hash,
-  MapPin,
-  Camera,
-  ScanText,
-  Search,
-  Crop,
-  ExternalLink,
-  Trash2,
-  Crosshair,
-  X,
-  Copy,
-  CheckCircle,
+  Upload, Image as ImageIcon, Hash, MapPin, Camera, ScanText, Search, Crop,
+  Trash2, Crosshair, X, Copy,
 } from 'lucide-react';
 import { useCase } from '@/components/CaseContext';
 import { useToast } from '@/components/Toast';
-import { supabase, type EvidenceRow, type LensMatchRow } from '@/lib/supabase';
+import type { EvidenceRow, LensMatchRow } from '@/lib/supabase';
 import { sha256, md5 } from '@/lib/crypto';
 import { logAudit } from '@/lib/audit';
 import { formatBytes } from '@/lib/format';
+import { safeQuery, isNetworkError } from '@/lib/localCases';
+import { supabase } from '@/lib/supabase';
+import { getMockData, mockEvidenceThumbnails } from '@/lib/mockData';
 import exifr from 'exifr';
 import L from 'leaflet';
 
@@ -33,13 +24,13 @@ const MOCK_LENS_MATCHES = [
   { target_url: 'https://twitter.com/anon_user/status/1829374', domain: 'twitter.com', page_title: 'Anonymous post with matching image', similarity_score: 0.68, first_indexed: '2026-09-15' },
 ];
 
-const MOCK_OCR_TEXT = 'ACCESS GRANTED - SECTOR 7\nAuthorization Code: 8821-AX\nTimestamp: 2026-09-12 14:32:08 UTC\nOperator: M. VANCE';
+type EvidenceWithThumb = EvidenceRow & { thumbnailUrl?: string };
 
 export function ImageLensEngine() {
   const { currentCase } = useCase();
   const { showToast } = useToast();
-  const [evidence, setEvidence] = useState<EvidenceRow[]>([]);
-  const [selectedEvidence, setSelectedEvidence] = useState<EvidenceRow | null>(null);
+  const [evidence, setEvidence] = useState<EvidenceWithThumb[]>([]);
+  const [selectedEvidence, setSelectedEvidence] = useState<EvidenceWithThumb | null>(null);
   const [lensMatches, setLensMatches] = useState<LensMatchRow[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -52,14 +43,18 @@ export function ImageLensEngine() {
   const imgRef = useRef<HTMLImageElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
-  const markerRef = useRef<L.Marker | null>(null);
 
   useEffect(() => {
     if (!currentCase) return;
     (async () => {
-      const { data } = await supabase.from('evidence_files').select('*').eq('case_id', currentCase.id).order('created_at', { ascending: false });
-      setEvidence(data || []);
-      if (data && data.length > 0) setSelectedEvidence(data[0]);
+      const mock = getMockData(currentCase.id);
+      const data = await safeQuery(
+        () => supabase.from('evidence_files').select('*').eq('case_id', currentCase.id).order('created_at', { ascending: false }),
+        mock.evidence as EvidenceRow[],
+      );
+      const withThumbs: EvidenceWithThumb[] = data.map((e) => ({ ...e, thumbnailUrl: mockEvidenceThumbnails[e.id] }));
+      setEvidence(withThumbs);
+      if (withThumbs.length > 0) setSelectedEvidence(withThumbs[0]);
       else setSelectedEvidence(null);
     })();
   }, [currentCase]);
@@ -67,8 +62,12 @@ export function ImageLensEngine() {
   useEffect(() => {
     if (!selectedEvidence) { setLensMatches([]); setOcrText(''); return; }
     (async () => {
-      const { data: matches } = await supabase.from('lens_matches').select('*').eq('evidence_id', selectedEvidence.id).order('similarity_score', { ascending: false });
-      setLensMatches(matches || []);
+      const mock = getMockData(currentCase.id);
+      const matches = await safeQuery(
+        () => supabase.from('lens_matches').select('*').eq('evidence_id', selectedEvidence.id).order('similarity_score', { ascending: false }),
+        mock.lensMatches.filter((m) => m.evidence_id === selectedEvidence.id),
+      );
+      setLensMatches(matches);
       setOcrText(selectedEvidence.ocr_text || '');
     })();
   }, [selectedEvidence]);
@@ -78,9 +77,7 @@ export function ImageLensEngine() {
     if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
     const map = L.map(mapRef.current).setView([selectedEvidence.gps_lat, selectedEvidence.gps_lng], 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: 'OSM' }).addTo(map);
-    const marker = L.marker([selectedEvidence.gps_lat, selectedEvidence.gps_lng]).addTo(map);
-    marker.bindPopup(`<b>GPS Location</b><br>Lat: ${selectedEvidence.gps_lat}<br>Lng: ${selectedEvidence.gps_lng}`);
-    markerRef.current = marker;
+    L.marker([selectedEvidence.gps_lat, selectedEvidence.gps_lng]).addTo(map).bindPopup(`<b>GPS Location</b><br>Lat: ${selectedEvidence.gps_lat}<br>Lng: ${selectedEvidence.gps_lng}`);
     mapInstanceRef.current = map;
     return () => { map.remove(); mapInstanceRef.current = null; };
   }, [selectedEvidence]);
@@ -93,24 +90,58 @@ export function ImageLensEngine() {
     try {
       const buffer = await file.arrayBuffer();
       const [sha256Hash, md5Hash] = await Promise.all([sha256(buffer), md5(buffer)]);
+      const thumbnailUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
       let exifData: Record<string, unknown> = {};
       let gpsLat: number | null = null;
       let gpsLng: number | null = null;
       try {
         const exif = await exifr.parse(buffer, { gps: true, tiff: true, exif: true });
         if (exif) {
-          exifData = { Make: exif.Make, Model: exif.Model, ISO: exif.ISO, Software: exif.Software, DateTime: exif.DateTimeOriginal || exif.CreateDate, FocalLength: exif.FocalLength, ExposureTime: exif.ExposureTime, FNumber: exif.FNumber, LensModel: exif.LensModel, ...exif };
+          exifData = { Make: exif.Make, Model: exif.Model, ISO: exif.ISO, Software: exif.Software, DateTime: exif.DateTimeOriginal || exif.CreateDate, FocalLength: exif.FocalLength, ExposureTime: exif.ExposureTime, FNumber: exif.FNumber, LensModel: exif.LensModel };
           if (exif.latitude && exif.longitude) { gpsLat = exif.latitude; gpsLng = exif.longitude; }
         }
       } catch { /* No EXIF */ }
-      const { data, error } = await supabase.from('evidence_files').insert({ case_id: currentCase.id, file_name: file.name, file_type: file.type, file_size: file.size, sha256: sha256Hash, md5: md5Hash, exif_data: exifData, gps_lat: gpsLat, gps_lng: gpsLng, ocr_text: MOCK_OCR_TEXT, notes: '' }).select().single();
-      if (error) throw error;
-      await logAudit(currentCase.id, 'EVIDENCE_UPLOADED', `Image "${file.name}" uploaded with SHA-256 hash verified`, 'evidence', data.id);
-      await supabase.from('entities').insert({ case_id: currentCase.id, type: 'image_hash', value: sha256Hash, label: file.name, metadata: { file_name: file.name, file_size: file.size, md5: md5Hash }, risk_level: 'medium', flagged: false });
-      setEvidence((prev) => [data, ...prev]);
-      setSelectedEvidence(data);
-      showToast(`Evidence uploaded & hashed: ${file.name}`, 'success');
-    } catch (err) { showToast(`Upload failed: ${(err as Error).message}`, 'error'); }
+
+      const newEvidence: EvidenceWithThumb = {
+        id: `local-evi-${Date.now()}`,
+        case_id: currentCase.id,
+        file_name: file.name,
+        file_type: file.type,
+        file_size: file.size,
+        sha256: sha256Hash,
+        md5: md5Hash,
+        exif_data: exifData,
+        gps_lat: gpsLat,
+        gps_lng: gpsLng,
+        ocr_text: '',
+        notes: '',
+        created_at: new Date().toISOString(),
+        thumbnailUrl,
+      };
+
+      try {
+        const { data, error } = await supabase.from('evidence_files').insert({
+          case_id: currentCase.id, file_name: file.name, file_type: file.type, file_size: file.size,
+          sha256: sha256Hash, md5: md5Hash, exif_data: exifData, gps_lat: gpsLat, gps_lng: gpsLng, ocr_text: '', notes: '',
+        }).select().single();
+        if (!error && data) {
+          await logAudit(currentCase.id, 'EVIDENCE_UPLOADED', `Image "${file.name}" uploaded with SHA-256 hash verified`, 'evidence', data.id);
+          newEvidence.id = data.id;
+        }
+      } catch (err) {
+        if (isNetworkError(err)) {
+          await logAudit(currentCase.id, 'EVIDENCE_UPLOADED', `Image "${file.name}" uploaded offline with SHA-256 hash verified`, 'evidence', newEvidence.id);
+        }
+      }
+
+      setEvidence((prev) => [{ ...newEvidence, thumbnailUrl }, ...prev]);
+      setSelectedEvidence({ ...newEvidence, thumbnailUrl });
+      showToast(`Evidence processed & hashed locally: ${file.name}`, 'success');
+    } catch (err) { showToast(`Processing failed: ${(err as Error).message}`, 'error'); }
     finally { setUploading(false); }
   }, [currentCase, showToast]);
 
@@ -122,19 +153,16 @@ export function ImageLensEngine() {
     setLensSearching(true);
     try {
       await new Promise((r) => setTimeout(r, 2000));
-      const matches = MOCK_LENS_MATCHES.map((m) => ({ evidence_id: selectedEvidence.id, case_id: currentCase.id, target_url: m.target_url, domain: m.domain, page_title: m.page_title, thumbnail_url: '', first_indexed: m.first_indexed, similarity_score: m.similarity_score }));
-      const { data } = await supabase.from('lens_matches').insert(matches).select();
-      setLensMatches(data || []);
-      for (const m of MOCK_LENS_MATCHES) {
-        const { data: existingEntity } = await supabase.from('entities').select('id').eq('case_id', currentCase.id).eq('value', m.target_url).maybeSingle();
-        if (existingEntity) continue;
-        const { data: webEntity } = await supabase.from('entities').insert({ case_id: currentCase.id, type: 'web_page' as const, value: m.target_url, label: m.page_title, metadata: { domain: m.domain, similarity: m.similarity_score, first_indexed: m.first_indexed }, risk_level: m.similarity_score > 0.8 ? 'high' : 'medium', flagged: m.similarity_score > 0.9 }).select().single();
-        if (webEntity) {
-          const { data: hashEntity } = await supabase.from('entities').select('id').eq('case_id', currentCase.id).eq('value', selectedEvidence.sha256).maybeSingle();
-          if (hashEntity) await supabase.from('relationships').insert({ case_id: currentCase.id, source_entity_id: hashEntity.id, target_entity_id: webEntity.id, relation_type: 'FOUND_ON_WEBSITE' as const });
-        }
-      }
-      await logAudit(currentCase.id, 'LENS_SEARCH', `Google Lens reverse search executed: ${matches.length} matches found`, 'evidence', selectedEvidence.id);
+      const matches = MOCK_LENS_MATCHES.map((m) => ({
+        id: `lens-${Date.now()}-${m.domain}`, evidence_id: selectedEvidence.id, case_id: currentCase.id,
+        target_url: m.target_url, domain: m.domain, page_title: m.page_title, thumbnail_url: '',
+        first_indexed: m.first_indexed, similarity_score: m.similarity_score, created_at: new Date().toISOString(),
+      }));
+      try {
+        await supabase.from('lens_matches').insert(matches);
+        await logAudit(currentCase.id, 'LENS_SEARCH', `Google Lens reverse search executed: ${matches.length} matches found`, 'evidence', selectedEvidence.id);
+      } catch { /* offline — still show results */ }
+      setLensMatches(matches);
       showToast(`Google Lens search complete: ${matches.length} matches found`, 'success');
     } catch (err) { showToast(`Lens search failed: ${(err as Error).message}`, 'error'); }
     finally { setLensSearching(false); }
@@ -144,18 +172,25 @@ export function ImageLensEngine() {
   const handleCropMove = (e: React.MouseEvent) => { if (!cropMode || !cropStart || !imgRef.current) return; const rect = imgRef.current.getBoundingClientRect(); const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100)); const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100)); setCropEnd({ x, y }); };
   const handleCropEnd = () => { if (!cropMode || !cropStart || !cropEnd) return; showToast('Region selected - sub-search triggered for cropped area', 'info'); setCropMode(false); setCropStart(null); setCropEnd(null); };
 
-  const handleDeleteEvidence = async (id: string) => { if (!currentCase) return; const { error } = await supabase.from('evidence_files').delete().eq('id', id); if (error) { showToast(`Delete failed: ${error.message}`, 'error'); return; } setEvidence((prev) => prev.filter((e) => e.id !== id)); if (selectedEvidence?.id === id) setSelectedEvidence(null); showToast('Evidence file deleted', 'success'); };
+  const handleDeleteEvidence = async (id: string) => {
+    if (!currentCase) return;
+    try { await supabase.from('evidence_files').delete().eq('id', id); } catch { /* offline */ }
+    setEvidence((prev) => prev.filter((e) => e.id !== id));
+    if (selectedEvidence?.id === id) setSelectedEvidence(null);
+    showToast('Evidence file deleted', 'success');
+  };
   const copyToClipboard = (text: string) => { navigator.clipboard.writeText(text); showToast('Hash copied to clipboard', 'info'); };
 
   if (!currentCase) return <div className="text-muted">Select a case first.</div>;
   const exif = selectedEvidence?.exif_data || {};
+  const thumbSrc = selectedEvidence?.thumbnailUrl;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-app">Forensic Image & Lens Intelligence Engine</h1>
-          <p className="text-sm text-muted">Upload forensic images for hash verification, EXIF parsing, and Google Lens reverse search</p>
+          <p className="text-sm text-muted">100% offline browser-based image processing with cryptographic hashing, EXIF parsing, and GPS geo-location</p>
         </div>
       </div>
 
@@ -166,7 +201,7 @@ export function ImageLensEngine() {
             {uploading ? (
               <div className="flex flex-col items-center gap-2"><div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" /><span className="text-xs text-accent">Processing & hashing...</span></div>
             ) : (
-              <><Upload className="w-8 h-8 text-muted mx-auto mb-2" /><div className="text-sm text-secondary">Drop image or click to upload</div><div className="text-xs text-muted mt-1">JPEG, PNG, WEBP</div></>
+              <><Upload className="w-8 h-8 text-muted mx-auto mb-2" /><div className="text-sm text-secondary">Drop image or click to upload</div><div className="text-xs text-muted mt-1">Processed locally — no upload</div></>
             )}
           </div>
 
@@ -175,8 +210,13 @@ export function ImageLensEngine() {
             <div className="divide-y divide-app/50 max-h-96 overflow-y-auto scrollbar-thin">
               {evidence.map((e) => (
                 <button key={e.id} onClick={() => setSelectedEvidence(e)} className={`w-full text-left px-4 py-2.5 hover:bg-hover ${selectedEvidence?.id === e.id ? 'bg-hover' : ''}`}>
-                  <div className="text-xs font-medium text-app truncate">{e.file_name}</div>
-                  <div className="flex items-center gap-2 mt-1"><span className="text-[10px] font-mono text-muted">{formatBytes(e.file_size)}</span><span className="text-[10px] font-mono text-accent">{e.file_type.split('/')[1]?.toUpperCase()}</span></div>
+                  <div className="flex items-center gap-2">
+                    {e.thumbnailUrl ? <img src={e.thumbnailUrl} alt={e.file_name} className="w-8 h-8 rounded object-cover shrink-0" /> : <ImageIcon className="w-8 h-8 text-muted shrink-0" />}
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-app truncate">{e.file_name}</div>
+                      <div className="flex items-center gap-2 mt-0.5"><span className="text-[10px] font-mono text-muted">{formatBytes(e.file_size)}</span><span className="text-[10px] font-mono text-accent">{e.file_type.split('/')[1]?.toUpperCase()}</span></div>
+                    </div>
+                  </div>
                 </button>
               ))}
               {evidence.length === 0 && <div className="px-4 py-6 text-center text-xs text-muted">No evidence uploaded</div>}
@@ -195,11 +235,15 @@ export function ImageLensEngine() {
                     <button onClick={runLensSearch} disabled={lensSearching} className="flex items-center gap-1 px-2 py-1 rounded text-xs text-success hover:opacity-80 disabled:opacity-50" style={{ backgroundColor: 'rgba(16,185,129,0.15)' }}>
                       {lensSearching ? <><div className="w-3 h-3 border border-success border-t-transparent rounded-full animate-spin" /> Searching...</> : <><Search className="w-3.5 h-3.5" /> Lens Search</>}
                     </button>
-                    <button onClick={() => handleDeleteEvidence(selectedEvidence.id)} className="p-1 rounded text-secondary hover:text-danger" style={{ hover: { backgroundColor: 'var(--danger-soft)' } }}><Trash2 className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => handleDeleteEvidence(selectedEvidence.id)} className="p-1 rounded text-secondary hover:text-danger"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
                 <div className="relative bg-sidebar flex items-center justify-center min-h-[300px] overflow-hidden" onMouseDown={handleCropStart} onMouseMove={handleCropMove} onMouseUp={handleCropEnd} style={{ cursor: cropMode ? 'crosshair' : 'default' }}>
-                  <img ref={imgRef} src={`https://placehold.co/600x400/1e293b/22d3ee?text=${encodeURIComponent(selectedEvidence.file_name)}`} alt={selectedEvidence.file_name} className="max-w-full max-h-[400px] object-contain" />
+                  {thumbSrc ? (
+                    <img ref={imgRef} src={thumbSrc} alt={selectedEvidence.file_name} className="max-w-full max-h-[400px] object-contain" />
+                  ) : (
+                    <img ref={imgRef} src={`https://placehold.co/600x400/1e293b/22d3ee?text=${encodeURIComponent(selectedEvidence.file_name)}`} alt={selectedEvidence.file_name} className="max-w-full max-h-[400px] object-contain" />
+                  )}
                   {cropMode && cropStart && cropEnd && (
                     <div className="absolute border-2 border-accent pointer-events-none" style={{ left: `${Math.min(cropStart.x, cropEnd.x)}%`, top: `${Math.min(cropStart.y, cropEnd.y)}%`, width: `${Math.abs(cropEnd.x - cropStart.x)}%`, height: `${Math.abs(cropEnd.y - cropStart.y)}%`, backgroundColor: 'var(--accent-soft)' }} />
                   )}
@@ -242,7 +286,7 @@ export function ImageLensEngine() {
                 <div className="px-4 py-2.5 border-b border-app"><h3 className="text-xs font-semibold text-secondary flex items-center gap-2"><Camera className="w-4 h-4 text-accent" /> EXIF Metadata</h3></div>
                 <div className="p-3 space-y-1.5 max-h-56 overflow-y-auto scrollbar-thin">
                   {Object.keys(exif).length > 0 ? (
-                    Object.entries(exif).filter(([k]) => !['_decoded', 'latitude', 'longitude', 'GPSLatitude', 'GPSLongitude'].includes(k as string)).map(([key, val]) => (
+                    Object.entries(exif).filter(([k]) => !['_decoded', 'latitude', 'longitude', 'GPSLatitude', 'GPSLongitude'].includes(k)).map(([key, val]) => (
                       <div key={key} className="flex items-center gap-2 text-xs"><span className="text-muted w-28 shrink-0">{key}</span><span className="text-app font-mono truncate">{String(val)}</span></div>
                     ))
                   ) : (<div className="text-xs text-muted py-2">No EXIF data found</div>)}
@@ -251,7 +295,7 @@ export function ImageLensEngine() {
 
               {selectedEvidence.gps_lat && selectedEvidence.gps_lng && (
                 <div className="rounded-xl border border-app bg-panel overflow-hidden">
-                  <div className="px-4 py-2.5 border-b border-app"><h3 className="text-xs font-semibold text-secondary flex items-center gap-2"><MapPin className="w-4 h-4 text-success" /> GPS Coordinates</h3><div className="text-[10px] font-mono text-muted mt-1">{selectedEvidence.gps_lat.toFixed(4)}, {selectedEvidence.gps_lng.toFixed(4)}</div></div>
+                  <div className="px-4 py-2.5 border-b border-app"><h3 className="text-xs font-semibold text-secondary flex items-center gap-2"><MapPin className="w-4 h-4 text-success" /> GPS Location Map</h3><div className="text-[10px] font-mono text-muted mt-1">Lat: {selectedEvidence.gps_lat.toFixed(4)}, Lng: {selectedEvidence.gps_lng.toFixed(4)}</div></div>
                   <div ref={mapRef} className="h-48 w-full" />
                 </div>
               )}

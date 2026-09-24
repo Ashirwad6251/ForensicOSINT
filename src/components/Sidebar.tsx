@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Shield,
   Plus,
+  Globe,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useCase } from './CaseContext';
@@ -19,7 +20,7 @@ import { supabase, type CaseRow } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit';
 import { localCases, isNetworkError } from '@/lib/localCases';
 
-export type ModuleKey = 'dashboard' | 'image-lens' | 'recon' | 'link-analysis' | 'capture-audit' | 'reporting';
+export type ModuleKey = 'dashboard' | 'image-lens' | 'recon' | 'link-analysis' | 'capture-audit' | 'reporting' | 'osint-hub';
 
 const navItems: { key: ModuleKey; label: string; icon: typeof FolderOpen }[] = [
   { key: 'dashboard', label: 'Case Dashboard', icon: FolderOpen },
@@ -28,6 +29,10 @@ const navItems: { key: ModuleKey; label: string; icon: typeof FolderOpen }[] = [
   { key: 'link-analysis', label: 'Link Analysis', icon: Share2 },
   { key: 'capture-audit', label: 'Capture & Audit', icon: FileSearch },
   { key: 'reporting', label: 'Case Reporting', icon: FileText },
+];
+
+const publicNavItems: { key: ModuleKey; label: string; icon: typeof FolderOpen }[] = [
+  { key: 'osint-hub', label: 'Public OSINT Hub', icon: Globe },
 ];
 
 export function Sidebar({
@@ -180,6 +185,28 @@ export function Sidebar({
           <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-2 px-2">Investigation Modules</div>
           <div className="space-y-0.5">
             {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = active === item.key;
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => onNavigate(item.key)}
+                  className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all ${
+                    isActive
+                      ? 'bg-accent-soft text-accent border-l-2 border-accent'
+                      : 'text-secondary hover:text-app hover:bg-hover'
+                  }`}
+                >
+                  <Icon className="w-4 h-4 shrink-0" />
+                  <span className="font-medium">{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-2 px-2 mt-4">Public Intelligence</div>
+          <div className="space-y-0.5">
+            {publicNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = active === item.key;
               return (

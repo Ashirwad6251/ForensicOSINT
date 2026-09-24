@@ -11,6 +11,7 @@ import { ReconEngine } from '@/modules/ReconEngine';
 import { LinkAnalysis } from '@/modules/LinkAnalysis';
 import { CaptureAudit } from '@/modules/CaptureAudit';
 import { Reporting } from '@/modules/Reporting';
+import { PublicOSINTHub } from '@/modules/PublicOSINTHub';
 
 const moduleTitles: Record<ModuleKey, string> = {
   dashboard: 'Case Dashboard',
@@ -19,6 +20,7 @@ const moduleTitles: Record<ModuleKey, string> = {
   'link-analysis': 'Link Analysis',
   'capture-audit': 'Capture & Audit',
   reporting: 'Case Reporting',
+  'osint-hub': 'Public OSINT Hub',
 };
 
 function TopBar({ activeModule }: { activeModule: ModuleKey }) {
@@ -79,6 +81,7 @@ function AppContent() {
             {activeModule === 'link-analysis' && <LinkAnalysis />}
             {activeModule === 'capture-audit' && <CaptureAudit />}
             {activeModule === 'reporting' && <Reporting />}
+          {activeModule === 'osint-hub' && <PublicOSINTHub />}
           </div>
         </main>
       </div>
