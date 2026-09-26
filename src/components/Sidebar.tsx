@@ -118,7 +118,6 @@ export function Sidebar({
             </div>
             <div>
               <div className="text-sm font-bold text-app tracking-tight">ForensicOSINT</div>
-              <div className="text-[10px] text-accent font-mono tracking-widest">STUDIO v2.6</div>
             </div>
           </div>
         </div>
