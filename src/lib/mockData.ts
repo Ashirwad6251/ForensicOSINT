@@ -1,6 +1,7 @@
 import type {
   EntityRow, EvidenceRow, LensMatchRow,
   WebCaptureRow, AuditLogRow, RelationshipRow,
+  EntityType, RiskLevel,
 } from './supabase';
 
 const NIGHTSHADE_ID = 'sample-nightshade';
@@ -158,6 +159,347 @@ export const mockPublicSearchResults: Record<string, { source: string; result: s
     { source: 'Shodan', result: 'Ports: 22(SSH), 80(HTTP/nginx), 443(HTTPS), 8080(Squid Proxy). OS: Ubuntu 22.04. Location: Moscow, RU. Tags: tor-exit, vpn.', risk: 'medium' },
   ],
 };
+
+// ===== UNIVERSAL OSINT SEARCH ENGINE =====
+
+export type QueryType = 'person' | 'email' | 'phone' | 'username' | 'ip' | 'domain' | 'company' | 'keyword';
+
+export type SocialProfile = {
+  platform: string;
+  handle: string;
+  url: string;
+  status: 'active' | 'inactive' | 'not_found';
+  followers?: number;
+  lastSeen?: string;
+};
+
+export type BreachRecord = {
+  source: string;
+  date: string;
+  exposedFields: string[];
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  passwordHash?: string;
+  pasteRef?: string;
+};
+
+export type OsintLocation = {
+  label: string;
+  lat: number;
+  lng: number;
+  city: string;
+  country: string;
+  source: string;
+  type: string;
+  risk: 'low' | 'medium' | 'high' | 'critical';
+};
+
+export type CorporateLink = {
+  entity: string;
+  role: string;
+  domain?: string;
+  relationship: string;
+  registeredDate?: string;
+};
+
+export type OsintSearchResult = {
+  queryType: QueryType;
+  queryValue: string;
+  summary: string;
+  personCard: {
+    aliases: string[];
+    emails: string[];
+    phones: string[];
+    socialProfiles: SocialProfile[];
+    bio: string;
+    riskLevel: RiskLevel;
+  };
+  breachIntel: BreachRecord[];
+  locations: OsintLocation[];
+  corporateLinks: CorporateLink[];
+  threatIntel: { source: string; verdict: string; score: number; risk: 'low' | 'medium' | 'high' | 'critical' }[];
+};
+
+export function detectQueryType(input: string): QueryType {
+  const v = input.trim();
+  if (/^\S+@\S+\.\S+$/.test(v)) return 'email';
+  if (/^\+?[\d\s\-()]{7,}$/.test(v)) return 'phone';
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v)) return 'ip';
+  if (/^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}(\/\S*)?$/.test(v) && !v.includes(' ')) return 'domain';
+  if (/^@?[a-zA-Z0-9_]{2,30}$/.test(v) && !v.includes(' ') && v.length <= 30) return 'username';
+  if (/\b(inc|llc|corp|ltd|gmbh|sarl|company|corporation|organization)\b/i.test(v)) return 'company';
+  if (/\b[A-Z][a-z]+\s[A-Z][a-z]+\b/.test(v) || /\b[A-Z][a-z]+\s[A-Z][a-z]+\s[A-Z]?[a-z]*\b/.test(v)) return 'person';
+  return 'keyword';
+}
+
+const queryTypeLabels: Record<QueryType, string> = {
+  person: 'PERSON SEARCH',
+  email: 'IDENTITY LOOKUP',
+  phone: 'IDENTITY LOOKUP',
+  username: 'IDENTITY LOOKUP',
+  ip: 'INFRASTRUCTURE',
+  domain: 'INFRASTRUCTURE',
+  company: 'CORPORATE',
+  keyword: 'GENERAL SEARCH',
+};
+
+export function getQueryTypeLabel(type: QueryType): string {
+  return queryTypeLabels[type];
+}
+
+const socialPlatforms = ['LinkedIn', 'GitHub', 'Twitter/X', 'Telegram', 'Reddit', 'Instagram', 'Facebook', 'TikTok', 'YouTube', 'Discord', 'Mastodon', 'Keybase', 'HackTheBox', 'TryHackMe', 'Patreon'];
+
+function hashStr(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
+  return Math.abs(h);
+}
+
+function pick<T>(arr: T[], seed: number): T { return arr[seed % arr.length]; }
+
+function generateSocialProfiles(query: string, seed: number): SocialProfile[] {
+  const handle = query.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 20) || 'unknown';
+  const platforms = socialPlatforms.slice(0, 10 + (seed % 5));
+  return platforms.map((p, i) => {
+    const s = seed + i * 7;
+    const statuses: SocialProfile['status'][] = ['active', 'active', 'active', 'inactive', 'not_found'];
+    const status = pick(statuses, s);
+    const handleMap: Record<string, string> = {
+      'Twitter/X': `@${handle}`,
+      'Telegram': `@${handle}`,
+      'Reddit': `u/${handle}`,
+      'GitHub': handle,
+      'LinkedIn': handle.replace('_', '-'),
+      'Instagram': `@${handle}`,
+      'Facebook': handle.replace('_', '.'),
+      'TikTok': `@${handle}`,
+      'YouTube': `@${handle}`,
+      'Discord': handle,
+      'Mastodon': `@${handle}@mastodon.social`,
+      'Keybase': handle,
+      'HackTheBox': handle,
+      'TryHackMe': handle,
+      'Patreon': handle,
+    };
+    const urlMap: Record<string, string> = {
+      'Twitter/X': `https://x.com/${handle}`,
+      'Telegram': `https://t.me/${handle}`,
+      'Reddit': `https://reddit.com/u/${handle}`,
+      'GitHub': `https://github.com/${handle}`,
+      'LinkedIn': `https://linkedin.com/in/${handle.replace('_', '-')}`,
+      'Instagram': `https://instagram.com/${handle}`,
+      'Facebook': `https://facebook.com/${handle.replace('_', '.')}`,
+      'TikTok': `https://tiktok.com/@${handle}`,
+      'YouTube': `https://youtube.com/@${handle}`,
+      'Discord': `https://discord.gg/${handle}`,
+      'Mastodon': `https://mastodon.social/@${handle}`,
+      'Keybase': `https://keybase.io/${handle}`,
+      'HackTheBox': `https://hackthebox.com/profile/${handle}`,
+      'TryHackMe': `https://tryhackme.com/p/${handle}`,
+      'Patreon': `https://patreon.com/${handle}`,
+    };
+    return {
+      platform: p,
+      handle: handleMap[p] || handle,
+      url: urlMap[p] || `https://${p.toLowerCase().replace(/[^a-z]/g, '')}.com/${handle}`,
+      status,
+      followers: status === 'active' ? (s % 50000) + 100 : undefined,
+      lastSeen: status === 'active' ? `2026-09-${String((s % 20) + 1).padStart(2, '0')}` : undefined,
+    };
+  });
+}
+
+const breachSources = ['Collection #1', 'AntiPublic Combo List', 'Exploit.in', 'Cit0day', 'BreachForums Archive', 'LeakCheck', 'DeHashed', 'HaveIBeenPwned', 'Pastebin Dumps', 'Ghostbin Leaks'];
+const breachFields = ['email', 'password', 'username', 'ip_address', 'phone', 'full_name', 'address', 'dob', 'hash'];
+const pasteSites = ['pastebin.com/raw/', 'ghostbin.com/paste/', 'darkforum.onion/thread/', 'raidforums.com/leak/', 'paste-bin.ru/view/'];
+
+function generateBreaches(query: string, seed: number): BreachRecord[] {
+  const count = (seed % 4) + 2;
+  const results: BreachRecord[] = [];
+  for (let i = 0; i < count; i++) {
+    const s = seed + i * 13;
+    const severities: BreachRecord['severity'][] = ['low', 'medium', 'high', 'critical'];
+    const severity = pick(severities, s);
+    const fieldCount = (s % 4) + 2;
+    const fields: string[] = [];
+    for (let j = 0; j < fieldCount; j++) fields.push(pick(breachFields, s + j * 5));
+    results.push({
+      source: pick(breachSources, s),
+      date: `202${(s % 6) + 0}-${String((s % 12) + 1).padStart(2, '0')}-${String((s % 28) + 1).padStart(2, '0')}`,
+      exposedFields: [...new Set(fields)],
+      severity,
+      passwordHash: fields.includes('password') ? `sha1:${hashStr(query + s).toString(16).padStart(8, '0')}` : undefined,
+      pasteRef: severity === 'high' || severity === 'critical' ? pick(pasteSites, s) + hashStr(query).toString(36) : undefined,
+    });
+  }
+  return results;
+}
+
+const cityData = [
+  { city: 'Moscow', country: 'Russia', lat: 55.7558, lng: 37.6173 },
+  { city: 'New York', country: 'USA', lat: 40.7128, lng: -74.006 },
+  { city: 'Berlin', country: 'Germany', lat: 52.52, lng: 13.405 },
+  { city: 'London', country: 'UK', lat: 51.5074, lng: -0.1278 },
+  { city: 'Tokyo', country: 'Japan', lat: 35.6762, lng: 139.6503 },
+  { city: 'Sydney', country: 'Australia', lat: -33.8688, lng: 151.2093 },
+  { city: 'Singapore', country: 'Singapore', lat: 1.3521, lng: 103.8198 },
+  { city: 'Dubai', country: 'UAE', lat: 25.2048, lng: 55.2708 },
+  { city: 'Amsterdam', country: 'Netherlands', lat: 52.3676, lng: 4.9041 },
+  { city: 'São Paulo', country: 'Brazil', lat: -23.5558, lng: -46.6396 },
+];
+
+const locationTypes = ['IP Geolocation', 'Registered Address', 'VPN Exit Node', 'Server Hosting', 'Social Check-in', 'Phone Area Code', 'Domain DNS Resolution', 'Corporate Filing'];
+const locationSources = ['IP GeoIP DB', 'WHOIS Record', 'Social Profile', 'DNS Lookup', 'Public Registry', 'Phone Carrier DB'];
+
+function generateLocations(query: string, queryType: QueryType, seed: number): OsintLocation[] {
+  const count = queryType === 'ip' || queryType === 'domain' ? 3 : (seed % 3) + 2;
+  const results: OsintLocation[] = [];
+  for (let i = 0; i < count; i++) {
+    const s = seed + i * 17;
+    const cd = pick(cityData, s);
+    const risks: OsintLocation['risk'][] = ['low', 'medium', 'high', 'critical'];
+    results.push({
+      label: query,
+      lat: cd.lat + (s % 100) / 1000,
+      lng: cd.lng + (s % 100) / 1000,
+      city: cd.city,
+      country: cd.country,
+      source: pick(locationSources, s),
+      type: pick(locationTypes, s),
+      risk: pick(risks, s),
+    });
+  }
+  return results;
+}
+
+const corporateRoles = ['CEO', 'CTO', 'Director', 'Shareholder', 'Founder', 'Board Member', 'Technical Lead', 'Advisory Board'];
+const corporateRelations = ['Officer of', 'Shareholder in', 'Founder of', 'Director at', 'Linked to', 'Registered agent for'];
+
+function generateCorporateLinks(query: string, queryType: QueryType, seed: number): CorporateLink[] {
+  const count = queryType === 'company' ? (seed % 4) + 3 : (seed % 3) + 1;
+  const results: CorporateLink[] = [];
+  const companyNames = [
+    'Thor Network LLC', 'PrivacyGuard Holdings', 'Sector7 Security', 'DarkMirror Solutions',
+    'CipherTrust Inc', 'Nightshade Group', 'Quantum Shield Corp', 'Phantom Industries',
+  ];
+  for (let i = 0; i < count; i++) {
+    const s = seed + i * 23;
+    results.push({
+      entity: queryType === 'company' ? query : pick(companyNames, s),
+      role: pick(corporateRoles, s),
+      domain: `${pick(['thor-network', 'privacyguard', 'sector7', 'darkmirror', 'ciphertrust', 'nightshade'], s)}.com`,
+      relationship: pick(corporateRelations, s),
+      registeredDate: `202${(s % 5) + 1}-${String((s % 12) + 1).padStart(2, '0')}-15`,
+    });
+  }
+  return results;
+}
+
+const threatSources = ['VirusTotal', 'AbuseIPDB', 'AlienVault OTX', 'Shodan', 'GreyNoise', 'ThreatCrowd', 'URLhaus', 'PhishTank'];
+
+function generateThreatIntel(query: string, queryType: QueryType, seed: number): OsintSearchResult['threatIntel'] {
+  if (queryType !== 'ip' && queryType !== 'domain' && queryType !== 'keyword') {
+    const s = seed;
+    return [
+      { source: 'HaveIBeenPwned', verdict: `${query} found in ${seed % 5 + 2} known data breaches`, score: (seed % 40) + 30, risk: seed % 3 === 0 ? 'high' : 'medium' },
+      { source: 'Pipl People Search', verdict: `Digital footprint: ${seed % 20 + 5} associated records found`, score: (seed % 30) + 20, risk: 'low' },
+    ];
+  }
+  const count = (seed % 4) + 3;
+  const results: OsintSearchResult['threatIntel'] = [];
+  for (let i = 0; i < count; i++) {
+    const s = seed + i * 29;
+    const risks: ('low' | 'medium' | 'high' | 'critical')[] = ['low', 'medium', 'high', 'critical'];
+    results.push({
+      source: pick(threatSources, s),
+      verdict: `${query}: ${pick(['malicious', 'suspicious', 'clean', 'flagged by community'], s)} — ${s % 89 + 3}/${89} vendors`,
+      score: s % 100,
+      risk: pick(risks, s),
+    });
+  }
+  return results;
+}
+
+function generateAliases(query: string, seed: number): string[] {
+  const base = query.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const variants = [
+    `${base}_op`, `${base}1337`, `${base}_dev`, `x${base}`, `${base}_sec`,
+    `${base}.h4ck`, `dark_${base}`, `${base}_pro`, `the_${base}`, `${base}_0`,
+  ];
+  const count = (seed % 4) + 2;
+  return variants.slice(0, count);
+}
+
+function generateEmails(query: string, queryType: QueryType, seed: number): string[] {
+  const base = query.toLowerCase().replace(/[^a-z0-9.]/g, '').replace(/\s+/g, '.');
+  if (queryType === 'email') return [query, `${base}_alt@protonmail.ch`];
+  const domains = ['protonmail.ch', 'gmail.com', 'tutanota.com', 'yandex.ru', 'mail.ru', 'icloud.com'];
+  const count = (seed % 3) + 2;
+  const results: string[] = [];
+  for (let i = 0; i < count; i++) results.push(`${base}@${pick(domains, seed + i * 11)}`);
+  return results;
+}
+
+function generatePhones(seed: number): string[] {
+  const count = (seed % 2) + 1;
+  const results: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const s = seed + i * 31;
+    results.push(`+1-${String(555 + (s % 100)).padStart(3, '0')}-${String(s % 1000).padStart(3, '0')}-${String(s % 10000).padStart(4, '0')}`);
+  }
+  return results;
+}
+
+export function generateOsintResult(query: string): OsintSearchResult {
+  const queryType = detectQueryType(query);
+  const seed = hashStr(query);
+  const riskLevels: RiskLevel[] = ['low', 'medium', 'high', 'critical'];
+  const riskLevel = pick(riskLevels, seed % 4);
+
+  const bios = [
+    `Digital footprint analysis for "${query}" reveals activity across multiple platforms and networks.`,
+    `Subject "${query}" has established presence in security communities with notable breach exposure.`,
+    `Infrastructure trace for "${query}" indicates associations with proxy networks and data hosting.`,
+    `"${query}" shows patterns consistent with active digital operations across 10+ platforms.`,
+  ];
+
+  return {
+    queryType,
+    queryValue: query,
+    summary: pick(bios, seed),
+    personCard: {
+      aliases: queryType === 'person' || queryType === 'username' ? generateAliases(query, seed) : [],
+      emails: generateEmails(query, queryType, seed),
+      phones: generatePhones(seed),
+      socialProfiles: generateSocialProfiles(query, seed),
+      bio: pick(bios, seed),
+      riskLevel,
+    },
+    breachIntel: generateBreaches(query, seed),
+    locations: generateLocations(query, queryType, seed),
+    corporateLinks: generateCorporateLinks(query, queryType, seed),
+    threatIntel: generateThreatIntel(query, queryType, seed),
+  };
+}
+
+// Entity import helpers — maps OSINT results to case entities
+export function osintResultToEntities(result: OsintSearchResult): { type: EntityType; value: string; label: string; metadata: Record<string, unknown>; risk_level: RiskLevel; flagged: boolean }[] {
+  const entities: { type: EntityType; value: string; label: string; metadata: Record<string, unknown>; risk_level: RiskLevel; flagged: boolean }[] = [];
+
+  if (result.queryType === 'person' || result.queryType === 'username') {
+    entities.push({ type: result.queryType === 'person' ? 'person' : 'username', value: result.queryValue, label: `OSINT: ${result.queryValue}`, metadata: { source: 'Public OSINT Hub', aliases: result.personCard.aliases, social_count: result.personCard.socialProfiles.length }, risk_level: result.personCard.riskLevel, flagged: result.personCard.riskLevel === 'critical' || result.personCard.riskLevel === 'high' });
+  }
+
+  result.personCard.emails.forEach((e) => entities.push({ type: 'email', value: e, label: `OSINT Email: ${e}`, metadata: { source: 'Public OSINT Hub', breach_count: result.breachIntel.length }, risk_level: result.breachIntel.length > 3 ? 'high' : 'medium', flagged: result.breachIntel.some((b) => b.severity === 'critical') }));
+  result.personCard.phones.forEach((p) => entities.push({ type: 'phone', value: p, label: `OSINT Phone: ${p}`, metadata: { source: 'Public OSINT Hub' }, risk_level: 'medium', flagged: false }));
+  result.corporateLinks.filter((c) => c.domain).forEach((c) => entities.push({ type: 'domain', value: c.domain!, label: `OSINT Domain: ${c.domain}`, metadata: { source: 'Public OSINT Hub', company: c.entity, role: c.role }, risk_level: 'medium', flagged: false }));
+
+  if (result.queryType === 'ip') entities.push({ type: 'ip', value: result.queryValue, label: `OSINT IP: ${result.queryValue}`, metadata: { source: 'Public OSINT Hub', threat_score: result.threatIntel[0]?.score }, risk_level: result.threatIntel[0]?.risk === 'critical' ? 'critical' : 'high', flagged: true });
+  if (result.queryType === 'domain') entities.push({ type: 'domain', value: result.queryValue, label: `OSINT Domain: ${result.queryValue}`, metadata: { source: 'Public OSINT Hub', threat_score: result.threatIntel[0]?.score }, risk_level: result.threatIntel[0]?.risk === 'critical' ? 'critical' : 'high', flagged: true });
+
+  result.personCard.socialProfiles.filter((s) => s.status === 'active').forEach((s) => entities.push({ type: 'url', value: s.url, label: `OSINT: ${s.platform}`, metadata: { source: 'Public OSINT Hub', platform: s.platform, handle: s.handle, followers: s.followers }, risk_level: 'low', flagged: false }));
+
+  return entities;
+}
 
 export function getMockData(caseId: string) {
   const isNightshade = caseId === NIGHTSHADE_ID;
